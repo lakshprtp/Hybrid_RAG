@@ -1,0 +1,467 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Hybrid RAG Assistant | Gemini + Qdrant + Tavily</title>
+  <!-- Tailwind CSS CDN -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  <!-- Lucide Icons -->
+  <script src="https://unpkg.com/lucide@latest"></script>
+  <!-- Marked for Markdown rendering -->
+  <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+  <style>
+    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap');
+    body { font-family: 'Inter', sans-serif; }
+    .prose p { margin-bottom: 0.75rem; }
+    .prose ul, .prose ol { margin-left: 1.25rem; margin-bottom: 0.75rem; list-style-type: disc; }
+    .prose pre { background: #1e293b; color: #f8fafc; padding: 0.75rem; border-radius: 0.5rem; overflow-x: auto; margin-bottom: 0.75rem; }
+    .prose code { font-size: 0.875rem; font-family: monospace; background: #e2e8f0; padding: 0.15rem 0.35rem; border-radius: 0.25rem; }
+    .prose pre code { background: transparent; padding: 0; }
+  </style>
+</head>
+<body class="bg-slate-50 text-slate-800 flex h-screen overflow-hidden">
+
+  <!-- Left Sidebar -->
+  <aside class="w-80 bg-white border-r border-slate-200 flex flex-col justify-between shrink-0 h-full">
+    <div class="p-5 overflow-y-auto">
+      <!-- App Brand -->
+      <div class="flex items-center gap-3 mb-6">
+        <div class="p-2 bg-gradient-to-tr from-blue-600 to-indigo-600 rounded-xl text-white shadow-md">
+          <i data-lucide="zap" class="w-6 h-6"></i>
+        </div>
+        <div>
+          <h1 class="font-bold text-lg leading-tight text-slate-900">Hybrid RAG</h1>
+          <p class="text-xs text-slate-500">Gemini • Qdrant • Tavily</p>
+        </div>
+      </div>
+
+      <!-- System Health Indicator -->
+      <div id="status-card" class="bg-slate-50 border border-slate-200 rounded-xl p-3 mb-6">
+        <div class="flex items-center justify-between mb-2">
+          <span class="text-xs font-semibold text-slate-600 uppercase tracking-wider">Status</span>
+          <span id="backend-badge" class="px-2 py-0.5 rounded-full text-xs font-medium bg-amber-100 text-amber-700 flex items-center gap-1">
+            <span class="w-1.5 h-1.5 rounded-full bg-amber-500 animate-pulse"></span> Checking...
+          </span>
+        </div>
+        <div class="text-xs text-slate-500 space-y-1">
+          <div class="flex justify-between"><span>Qdrant DB:</span> <span id="qdrant-status" class="font-medium text-slate-700">Connecting...</span></div>
+          <div class="flex justify-between"><span>Indexed Chunks:</span> <span id="chunk-count" class="font-medium text-slate-700">0</span></div>
+        </div>
+      </div>
+
+      <!-- Search Mode Selection -->
+      <div class="mb-6">
+        <label class="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-2">Search Strategy</label>
+        <div class="space-y-2">
+          <label class="flex items-center gap-3 p-2.5 rounded-lg border border-indigo-200 bg-indigo-50/50 cursor-pointer hover:bg-indigo-50 transition">
+            <input type="radio" name="search_mode" value="hybrid" checked class="text-indigo-600 focus:ring-indigo-500">
+            <div>
+              <div class="text-sm font-semibold text-indigo-950 flex items-center gap-1.5">⚡ Hybrid Search</div>
+              <div class="text-xs text-slate-500">Qdrant Docs + Live Tavily Search</div>
+            </div>
+          </label>
+          <label class="flex items-center gap-3 p-2.5 rounded-lg border border-slate-200 hover:bg-slate-50 cursor-pointer transition">
+            <input type="radio" name="search_mode" value="documents" class="text-indigo-600 focus:ring-indigo-500">
+            <div>
+              <div class="text-sm font-semibold text-slate-900 flex items-center gap-1.5">📚 Documents Only</div>
+              <div class="text-xs text-slate-500">Qdrant Vector Database</div>
+            </div>
+          </label>
+          <label class="flex items-center gap-3 p-2.5 rounded-lg border border-slate-200 hover:bg-slate-50 cursor-pointer transition">
+            <input type="radio" name="search_mode" value="web" class="text-indigo-600 focus:ring-indigo-500">
+            <div>
+              <div class="text-sm font-semibold text-slate-900 flex items-center gap-1.5">🌐 Web Search Only</div>
+              <div class="text-xs text-slate-500">Tavily AI Search Engine</div>
+            </div>
+          </label>
+        </div>
+      </div>
+
+      <!-- Document Ingestion Dropzone -->
+      <div class="mb-6">
+        <label class="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-2">Upload Documents</label>
+        <div class="border-2 border-dashed border-slate-300 hover:border-indigo-400 bg-slate-50/50 rounded-xl p-4 text-center cursor-pointer transition relative" id="drop-zone">
+          <input type="file" id="file-input" multiple accept=".pdf,.txt,.md" class="absolute inset-0 opacity-0 cursor-pointer">
+          <i data-lucide="upload-cloud" class="w-8 h-8 mx-auto text-slate-400 mb-2"></i>
+          <p class="text-xs font-medium text-slate-700">Click or drag PDF, TXT, MD</p>
+          <p class="text-[10px] text-slate-400 mt-1">Chunked & embedded with Gemini</p>
+        </div>
+        <div id="file-list" class="mt-2 text-xs text-slate-600 space-y-1"></div>
+        <button id="upload-btn" class="w-full mt-3 py-2 px-3 bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-medium rounded-lg shadow-sm transition disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-1.5" disabled>
+          <i data-lucide="layers" class="w-4 h-4"></i> Index into Qdrant
+        </button>
+      </div>
+
+      <!-- Indexed Documents Section -->
+      <div class="mb-4">
+        <div class="flex items-center justify-between mb-2">
+          <label class="text-xs font-bold text-slate-700 uppercase tracking-wider">Indexed Files</label>
+          <button id="clear-db-btn" class="text-[11px] text-red-500 hover:text-red-700 hover:underline">Clear DB</button>
+        </div>
+        <div id="indexed-docs" class="max-h-36 overflow-y-auto space-y-1 text-xs text-slate-600 pr-1">
+          <p class="text-slate-400 italic">No files indexed yet.</p>
+        </div>
+      </div>
+    </div>
+
+    <!-- Sidebar Footer -->
+    <div class="p-4 border-t border-slate-200 text-xs text-slate-400 flex items-center justify-between">
+      <span>Gemini 1.5 + Qdrant</span>
+      <a href="/docs" target="_blank" class="text-indigo-600 hover:underline flex items-center gap-1">Swagger API <i data-lucide="external-link" class="w-3 h-3"></i></a>
+    </div>
+  </aside>
+
+  <!-- Main Chat Section -->
+  <main class="flex-1 flex flex-col h-full bg-white relative">
+    
+    <!-- Top Header -->
+    <header class="h-16 border-b border-slate-200 px-6 flex items-center justify-between bg-white/80 backdrop-blur shrink-0">
+      <div class="flex items-center gap-2">
+        <span class="text-sm font-semibold text-slate-800">Conversation</span>
+        <span class="text-xs px-2 py-0.5 bg-slate-100 text-slate-600 rounded-md">Qdrant Vector RAG + Tavily</span>
+      </div>
+      <button id="reset-chat-btn" class="text-xs text-slate-500 hover:text-slate-800 flex items-center gap-1 p-1.5 rounded hover:bg-slate-100 transition">
+        <i data-lucide="rotate-ccw" class="w-3.5 h-3.5"></i> Clear Chat
+      </button>
+    </header>
+
+    <!-- Chat Messages Scroll Container -->
+    <div id="messages-container" class="flex-1 overflow-y-auto p-6 space-y-6">
+      
+      <!-- Welcome Message -->
+      <div class="flex gap-4 max-w-3xl">
+        <div class="w-8 h-8 rounded-lg bg-indigo-600 text-white flex items-center justify-center shrink-0 shadow">
+          <i data-lucide="bot" class="w-5 h-5"></i>
+        </div>
+        <div class="space-y-2">
+          <div class="bg-slate-100 rounded-2xl rounded-tl-sm px-4 py-3 text-sm text-slate-800 leading-relaxed shadow-sm">
+            <p class="font-semibold text-slate-900 mb-1">Welcome to the Hybrid RAG Assistant! 🚀</p>
+            <p>I can help answer questions by synthesizing knowledge from two powerful sources:</p>
+            <ul class="list-disc list-inside mt-2 space-y-1 text-slate-700">
+              <li><b>Your Documents</b>: Upload PDFs or text files to vector-search with <b>Qdrant DB</b> and <b>Gemini Embeddings</b>.</li>
+              <li><b>Live Internet</b>: Real-time web retrieval via <b>Tavily Search</b>.</li>
+            </ul>
+          </div>
+        </div>
+      </div>
+
+    </div>
+
+    <!-- Input Footer -->
+    <footer class="p-4 bg-white border-t border-slate-200">
+      <div class="max-w-4xl mx-auto">
+        <form id="chat-form" class="flex items-center gap-3">
+          <div class="relative flex-1">
+            <input 
+              type="text" 
+              id="user-input" 
+              placeholder="Ask anything about your uploaded files or query the web..." 
+              class="w-full pl-4 pr-12 py-3 bg-slate-100 focus:bg-white border border-transparent focus:border-indigo-500 rounded-xl text-sm focus:outline-none transition shadow-inner"
+              autocomplete="off"
+            />
+          </div>
+          <button 
+            type="submit" 
+            id="send-btn"
+            class="px-5 py-3 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-sm font-medium transition shadow flex items-center gap-1.5 shrink-0 disabled:opacity-50"
+          >
+            <span>Ask</span>
+            <i data-lucide="send" class="w-4 h-4"></i>
+          </button>
+        </form>
+        <p class="text-[11px] text-center text-slate-400 mt-2">Answers are generated with Gemini and grounded with citations.</p>
+      </div>
+    </footer>
+
+  </main>
+
+  <script>
+    lucide.createIcons();
+
+    let selectedFiles = [];
+
+    // Elements
+    const dropZone = document.getElementById('drop-zone');
+    const fileInput = document.getElementById('file-input');
+    const fileList = document.getElementById('file-list');
+    const uploadBtn = document.getElementById('upload-btn');
+    const messagesContainer = document.getElementById('messages-container');
+    const chatForm = document.getElementById('chat-form');
+    const userInput = document.getElementById('user-input');
+    const sendBtn = document.getElementById('send-btn');
+    const indexedDocsContainer = document.getElementById('indexed-docs');
+    const clearDbBtn = document.getElementById('clear-db-btn');
+    const resetChatBtn = document.getElementById('reset-chat-btn');
+
+    // Fetch System Status
+    async function loadStatus() {
+      try {
+        const res = await fetch('/api/status');
+        const data = await res.json();
+        const badge = document.getElementById('backend-badge');
+        const qStatus = document.getElementById('qdrant-status');
+        const count = document.getElementById('chunk-count');
+
+        badge.className = "px-2 py-0.5 rounded-full text-xs font-medium bg-emerald-100 text-emerald-700 flex items-center gap-1";
+        badge.innerHTML = '<span class="w-1.5 h-1.5 rounded-full bg-emerald-500"></span> Online';
+        qStatus.innerText = data.qdrant_status === 'connected' ? 'Connected' : data.qdrant_status;
+        count.innerText = data.total_chunks_indexed || 0;
+      } catch (err) {
+        const badge = document.getElementById('backend-badge');
+        badge.className = "px-2 py-0.5 rounded-full text-xs font-medium bg-red-100 text-red-700 flex items-center gap-1";
+        badge.innerHTML = '<span class="w-1.5 h-1.5 rounded-full bg-red-500"></span> Offline';
+      }
+    }
+
+    // Load Indexed Documents
+    async function loadIndexedDocs() {
+      try {
+        const res = await fetch('/api/documents');
+        const data = await res.json();
+        if (data.documents && data.documents.length > 0) {
+          indexedDocsContainer.innerHTML = data.documents.map(d => `
+            <div class="flex items-center justify-between p-1.5 bg-slate-50 border border-slate-200 rounded">
+              <span class="truncate font-medium">${d.filename}</span>
+              <span class="text-[10px] text-slate-400 shrink-0 ml-2">${d.chunks} chunks</span>
+            </div>
+          `).join('');
+        } else {
+          indexedDocsContainer.innerHTML = '<p class="text-slate-400 italic">No files indexed yet.</p>';
+        }
+      } catch (err) {
+        console.error(err);
+      }
+    }
+
+    // File Input Handling
+    fileInput.addEventListener('change', (e) => {
+      selectedFiles = Array.from(e.target.files);
+      updateFileList();
+    });
+
+    function updateFileList() {
+      if (selectedFiles.length > 0) {
+        fileList.innerHTML = selectedFiles.map(f => `<div>📄 ${f.name} (${(f.size/1024).toFixed(1)} KB)</div>`).join('');
+        uploadBtn.disabled = false;
+      } else {
+        fileList.innerHTML = '';
+        uploadBtn.disabled = true;
+      }
+    }
+
+    // Upload & Index Documents
+    uploadBtn.addEventListener('click', async () => {
+      if (selectedFiles.length === 0) return;
+      uploadBtn.disabled = true;
+      uploadBtn.innerHTML = `<span class="animate-spin inline-block mr-1">🌀</span> Indexing with Gemini...`;
+
+      const formData = new FormData();
+      selectedFiles.forEach(file => formData.append('files', file));
+      formData.append('chunk_size', 800);
+      formData.append('chunk_overlap', 150);
+
+      try {
+        const res = await fetch('/api/upload', {
+          method: 'POST',
+          body: formData
+        });
+        const data = await res.json();
+        if (res.ok) {
+          alert(`✅ Success: ${data.message}`);
+          selectedFiles = [];
+          fileInput.value = '';
+          updateFileList();
+          loadStatus();
+          loadIndexedDocs();
+        } else {
+          alert(`❌ Upload Error: ${data.detail || res.statusText}`);
+        }
+      } catch (err) {
+        alert(`❌ Upload Failed: ${err.message}`);
+      } finally {
+        uploadBtn.disabled = selectedFiles.length === 0;
+        uploadBtn.innerHTML = `<i data-lucide="layers" class="w-4 h-4"></i> Index into Qdrant`;
+        lucide.createIcons();
+      }
+    });
+
+    // Clear Database
+    clearDbBtn.addEventListener('click', async () => {
+      if (!confirm('Are you sure you want to delete all indexed points from Qdrant?')) return;
+      try {
+        const res = await fetch('/api/documents', { method: 'DELETE' });
+        if (res.ok) {
+          loadStatus();
+          loadIndexedDocs();
+          alert('Database reset successfully.');
+        }
+      } catch (err) {
+        alert('Failed to clear: ' + err.message);
+      }
+    });
+
+    // Reset Chat
+    resetChatBtn.addEventListener('click', () => {
+      messagesContainer.innerHTML = '';
+    });
+
+    // Chat Message Form
+    chatForm.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const text = userInput.value.trim();
+      if (!text) return;
+
+      const searchMode = document.querySelector('input[name="search_mode"]:checked').value;
+
+      // 1. Render User Message
+      appendMessage('user', text);
+      userInput.value = '';
+      sendBtn.disabled = true;
+
+      // 2. Render Loading State
+      const loaderId = appendLoading();
+      messagesContainer.scrollTop = messagesContainer.scrollHeight;
+
+      try {
+        const res = await fetch('/api/query', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            query: text,
+            search_mode: searchMode,
+            top_k_docs: 4,
+            max_web_results: 4
+          })
+        });
+
+        const data = await res.json();
+        removeLoading(loaderId);
+
+        if (res.ok) {
+          appendAssistantResponse(data);
+        } else {
+          appendMessage('assistant', `⚠️ Error: ${data.detail || 'Failed to generate answer'}`);
+        }
+      } catch (err) {
+        removeLoading(loaderId);
+        appendMessage('assistant', `❌ Connection Error: ${err.message}`);
+      } finally {
+        sendBtn.disabled = false;
+        messagesContainer.scrollTop = messagesContainer.scrollHeight;
+      }
+    });
+
+    function appendMessage(role, text) {
+      const isUser = role === 'user';
+      const div = document.createElement('div');
+      div.className = `flex gap-4 max-w-3xl ${isUser ? 'ml-auto flex-row-reverse' : ''}`;
+      div.innerHTML = `
+        <div class="w-8 h-8 rounded-lg ${isUser ? 'bg-slate-800' : 'bg-indigo-600'} text-white flex items-center justify-center shrink-0 shadow">
+          <i data-lucide="${isUser ? 'user' : 'bot'}" class="w-5 h-5"></i>
+        </div>
+        <div class="space-y-1">
+          <div class="${isUser ? 'bg-indigo-600 text-white rounded-2xl rounded-tr-sm' : 'bg-slate-100 text-slate-800 rounded-2xl rounded-tl-sm'} px-4 py-3 text-sm leading-relaxed shadow-sm">
+            ${text}
+          </div>
+        </div>
+      `;
+      messagesContainer.appendChild(div);
+      lucide.createIcons();
+      messagesContainer.scrollTop = messagesContainer.scrollHeight;
+    }
+
+    function appendAssistantResponse(data) {
+      const div = document.createElement('div');
+      div.className = 'flex gap-4 max-w-3xl';
+
+      let docSourcesHtml = '';
+      if (data.document_sources && data.document_sources.length > 0) {
+        docSourcesHtml = `
+          <details class="mt-2 text-xs bg-white border border-slate-200 rounded-lg p-2.5">
+            <summary class="font-semibold text-slate-700 cursor-pointer flex items-center gap-1.5">
+              <span>📚 Document Sources from Qdrant (${data.document_sources.length} chunks)</span>
+            </summary>
+            <div class="space-y-2 mt-2 pt-2 border-t border-slate-100">
+              ${data.document_sources.map(d => `
+                <div class="p-2 bg-slate-50 rounded border border-slate-100">
+                  <div class="text-[11px] font-semibold text-slate-600 mb-0.5">📄 ${d.filename} (Chunk #${d.chunk_id}, Score: ${d.score})</div>
+                  <div class="text-slate-700 text-xs">${d.text}</div>
+                </div>
+              `).join('')}
+            </div>
+          </details>
+        `;
+      }
+
+      let webSourcesHtml = '';
+      if (data.web_sources && data.web_sources.length > 0) {
+        webSourcesHtml = `
+          <details class="mt-2 text-xs bg-white border border-slate-200 rounded-lg p-2.5">
+            <summary class="font-semibold text-slate-700 cursor-pointer flex items-center gap-1.5">
+              <span>🌐 Web Sources from Tavily (${data.web_sources.length} results)</span>
+            </summary>
+            <div class="space-y-2 mt-2 pt-2 border-t border-slate-100">
+              ${data.web_sources.map(w => `
+                <div class="p-2 bg-slate-50 rounded border border-slate-100">
+                  <a href="${w.url}" target="_blank" class="text-[11px] font-semibold text-indigo-600 hover:underline block mb-0.5">🔗 ${w.title}</a>
+                  <div class="text-slate-700 text-xs">${w.content}</div>
+                </div>
+              `).join('')}
+            </div>
+          </details>
+        `;
+      }
+
+      const parsedMarkdown = marked.parse(data.answer);
+
+      div.innerHTML = `
+        <div class="w-8 h-8 rounded-lg bg-indigo-600 text-white flex items-center justify-center shrink-0 shadow">
+          <i data-lucide="bot" class="w-5 h-5"></i>
+        </div>
+        <div class="space-y-2 flex-1">
+          <div class="bg-slate-100 rounded-2xl rounded-tl-sm px-4 py-3 text-sm text-slate-800 leading-relaxed shadow-sm prose max-w-none">
+            ${parsedMarkdown}
+          </div>
+          ${docSourcesHtml}
+          ${webSourcesHtml}
+          <div class="text-[10px] text-slate-400">
+            ⏱️ Latency: ${data.stats.total_latency_seconds}s | Mode: ${data.mode_used}
+          </div>
+        </div>
+      `;
+      messagesContainer.appendChild(div);
+      lucide.createIcons();
+      messagesContainer.scrollTop = messagesContainer.scrollHeight;
+    }
+
+    function appendLoading() {
+      const id = 'loader-' + Date.now();
+      const div = document.createElement('div');
+      div.id = id;
+      div.className = 'flex gap-4 max-w-3xl';
+      div.innerHTML = `
+        <div class="w-8 h-8 rounded-lg bg-indigo-600 text-white flex items-center justify-center shrink-0 shadow">
+          <i data-lucide="bot" class="w-5 h-5"></i>
+        </div>
+        <div class="bg-slate-100 rounded-2xl rounded-tl-sm px-4 py-3 text-sm text-slate-500 flex items-center gap-2 shadow-sm">
+          <span class="w-2 h-2 rounded-full bg-indigo-600 animate-ping"></span>
+          <span>Searching Qdrant & Tavily, generating answer...</span>
+        </div>
+      `;
+      messagesContainer.appendChild(div);
+      lucide.createIcons();
+      return id;
+    }
+
+    function removeLoading(id) {
+      const el = document.getElementById(id);
+      if (el) el.remove();
+    }
+
+    // Initial Load
+    loadStatus();
+    loadIndexedDocs();
+  </script>
+</body>
+</html>

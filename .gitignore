@@ -1,0 +1,51 @@
+# Environment variables and credentials
+.env
+.env*.local
+.env.backup
+.streamlit/secrets.toml
+
+# Virtual environments
+venv/
+.venv/
+env/
+ENV/
+
+# Python bytecode & cache
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+
+# Local databases & vector storage
+*.db
+*.sqlite
+*.sqlite3
+chat_history.db
+qdrant_storage/
+
+# Operating System files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# IDEs & Editor configs
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Testing & coverage
+.pytest_cache/
+.coverage
+.coverage.*
+htmlcov/
+
+# Logs & temp files
+*.log
+*.tmp
