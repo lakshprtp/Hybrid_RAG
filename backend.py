@@ -803,7 +803,7 @@ def list_documents(thread_id: Optional[str] = None):
 def clear_all_documents(thread_id: Optional[str] = None):
     """
     Delete indexed documents for a specific thread or reset the entire collection.
-    Guarantees immediate purge in Qdrant with wait=True.
+    Guarantees immediate purge in Qdrant with wait=True across all paginated points.
     """
     client = get_qdrant_client()
     try:
@@ -816,34 +816,54 @@ def clear_all_documents(thread_id: Optional[str] = None):
                     )
                 ]
             )
-            # 1. Scroll point IDs for this thread to delete by specific IDs
+            # 1. Scroll point IDs for this thread with pagination to delete by specific IDs
+            total_purged_ids = 0
             try:
-                points_to_delete, _ = client.scroll(
-                    collection_name=COLLECTION_NAME,
-                    scroll_filter=del_filter,
-                    limit=10000,
-                    with_payload=False,
-                    with_vectors=False
-                )
-                if points_to_delete:
-                    ids = [p.id for p in points_to_delete]
-                    client.delete(
+                offset = None
+                while True:
+                    points_to_delete, next_offset = client.scroll(
                         collection_name=COLLECTION_NAME,
-                        points_selector=ids,
-                        wait=True
+                        scroll_filter=del_filter,
+                        limit=1000,
+                        offset=offset,
+                        with_payload=False,
+                        with_vectors=False
                     )
-                    logger.info(f"Purged {len(ids)} points by ID for thread '{thread_id}'.")
+                    if points_to_delete:
+                        ids = [p.id for p in points_to_delete]
+                        client.delete(
+                            collection_name=COLLECTION_NAME,
+                            points_selector=qmodels.PointIdsList(points=ids),
+                            wait=True
+                        )
+                        total_purged_ids += len(ids)
+                    if not next_offset:
+                        break
+                    offset = next_offset
+                if total_purged_ids > 0:
+                    logger.info(f"Purged {total_purged_ids} points by ID for thread '{thread_id}'.")
             except Exception as scroll_err:
                 logger.warning(f"ID-based deletion scroll note: {scroll_err}")
 
-            # 2. Also delete using filter with wait=True to guarantee no orphan points remain
-            client.delete(
-                collection_name=COLLECTION_NAME,
-                points_selector=del_filter,
-                wait=True
-            )
-            logger.info(f"Purged all points with filter thread_id='{thread_id}'.")
-            return {"message": f"Documents for thread '{thread_id}' cleared successfully."}
+            # 2. Also delete using FilterSelector with wait=True to guarantee no orphan points remain
+            try:
+                client.delete(
+                    collection_name=COLLECTION_NAME,
+                    points_selector=qmodels.FilterSelector(filter=del_filter),
+                    wait=True
+                )
+            except Exception as filt_err:
+                try:
+                    client.delete(
+                        collection_name=COLLECTION_NAME,
+                        points_selector=del_filter,
+                        wait=True
+                    )
+                except Exception as direct_err:
+                    logger.warning(f"Filter-based deletion note: {direct_err}")
+
+            logger.info(f"Purged all vector points for thread_id='{thread_id}'.")
+            return {"message": f"Documents for thread '{thread_id}' cleared successfully.", "points_deleted": total_purged_ids}
         else:
             client.delete_collection(collection_name=COLLECTION_NAME)
             ensure_collection()
@@ -851,6 +871,27 @@ def clear_all_documents(thread_id: Optional[str] = None):
     except Exception as e:
         logger.error(f"Error clearing collection: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.delete("/api/threads/{thread_id}")
+def delete_thread_endpoint(thread_id: str):
+    """
+    Completely delete a chat thread: purges all messages and thread records from PostgreSQL,
+    and all associated document vector embeddings from Qdrant Vector DB.
+    """
+    thread_id = str(thread_id).strip()
+    # 1. Purge vectors from Qdrant
+    vec_res = clear_all_documents(thread_id=thread_id)
+
+    # 2. Purge messages and thread from PostgreSQL (or SQLite fallback)
+    import chat_history
+    chat_history.delete_thread(thread_id, purge_vector_db=False)
+
+    return {
+        "status": "success",
+        "message": f"Thread '{thread_id}' and all associated Postgres data and Qdrant vectors have been purged.",
+        "vector_result": vec_res
+    }
 
 
 def clean_rag_answer(text: str) -> str:

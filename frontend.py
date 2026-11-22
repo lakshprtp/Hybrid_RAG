@@ -116,11 +116,21 @@ with st.sidebar:
                         st.rerun()
             
             with col_d:
-                if st.button("🗑️", key=f"del_{t['id']}", help="Delete chat and its documents"):
-                    clear_all_documents(thread_id=t["id"])
-                    chat_history.delete_thread(t["id"])
+                if st.button("🗑️", key=f"del_{t['id']}", help="Delete chat, Postgres messages, and Qdrant documents"):
+                    del_thread_id = t["id"]
+                    try:
+                        # 1. Purge all document vectors from Qdrant Vector DB
+                        clear_all_documents(thread_id=del_thread_id)
+                    except Exception:
+                        pass
+                    try:
+                        # 2. Purge thread and all conversation messages from PostgreSQL
+                        chat_history.delete_thread(del_thread_id, purge_vector_db=False)
+                    except Exception:
+                        pass
+
                     # If deleted active thread, switch to another or create new
-                    if t["id"] == st.session_state.current_thread_id:
+                    if del_thread_id == st.session_state.current_thread_id:
                         remaining = chat_history.list_threads()
                         st.session_state.current_thread_id = remaining[0]["id"] if remaining else chat_history.create_thread("New Chat")
                     st.rerun()
@@ -129,38 +139,7 @@ with st.sidebar:
 
     st.markdown("---")
 
-    # 3. System Status
-    st.markdown("### ⚙️ System Status")
-    status_data = get_system_status()
-    gemini_ok = status_data.get('gemini_api_configured', False)
-    tavily_ok = status_data.get('tavily_api_configured', False)
-    
-    # Active chat document count
-    docs_info_active = list_documents(thread_id=st.session_state.current_thread_id)
-    active_chat_chunks = docs_info_active.get("total_chunks", 0)
-
-    st.markdown(
-        f"""
-        <div>
-            <span class="badge badge-blue">Qdrant: {status_data.get('qdrant_status', 'ok')}</span>
-        </div>
-        <div style="margin-top: 8px; font-size: 0.85rem; color: #475569;">
-            🗄️ <b>Chat DB:</b> Postgres<br>
-            📊 <b>Total Chunks (All Chats):</b> {status_data.get('total_chunks_indexed', 0)}<br>
-            📄 <b>Active Chat Chunks:</b> {active_chat_chunks}<br>
-            🧠 <b>Embedder:</b> {status_data.get('embedding_model', 'gemini-embedding-001')}<br>
-            🤖 <b>LLM:</b> {status_data.get('generation_model', 'gemini-3.5-flash')}
-        </div>
-        """,
-        unsafe_allow_html=True
-    )
-
-    if not gemini_ok:
-        st.warning("⚠️ `GEMINI_API_KEY` is not set in `.env`.")
-
-    st.markdown("---")
-
-    # 4. Search Strategy
+    # 3. Search Strategy
     st.markdown("### 🔍 Search Strategy")
     search_mode = st.radio(
         "Choose retrieval strategy:",
@@ -175,7 +154,7 @@ with st.sidebar:
 
     st.markdown("---")
 
-    # 5. Document Ingestion
+    # 4. Document Ingestion
     st.markdown("### 📁 Document Ingestion")
     st.caption("Max file size: **2MB** per file (PDF, TXT, MD)")
     uploaded_files = st.file_uploader(
@@ -239,11 +218,44 @@ with st.sidebar:
 
     st.markdown("---")
 
-    # 6. Retrieval Settings
-    st.markdown("### 🎛️ Retrieval Settings")
-    top_k_docs = st.slider("Document Chunks (Top-K)", min_value=1, max_value=20, value=8)
-    max_web_results = st.slider("Web Results (Tavily)", min_value=1, max_value=10, value=4)
-    tavily_depth = st.selectbox("Tavily Depth", ["basic", "advanced"], index=0)
+    # 5. Advanced Settings (Retrieval Settings & System Status)
+    with st.expander("⚙️ Advanced Settings", expanded=False):
+        # Retrieval Settings
+        st.markdown("#### 🎛️ Retrieval Settings")
+        top_k_docs = st.slider("Document Chunks (Top-K)", min_value=1, max_value=20, value=8)
+        max_web_results = st.slider("Web Results (Tavily)", min_value=1, max_value=10, value=4)
+        tavily_depth = st.selectbox("Tavily Depth", ["basic", "advanced"], index=0)
+
+        st.markdown("---")
+
+        # System Status
+        st.markdown("#### ⚙️ System Status")
+        status_data = get_system_status()
+        gemini_ok = status_data.get('gemini_api_configured', False)
+        tavily_ok = status_data.get('tavily_api_configured', False)
+
+        # Active chat document count
+        docs_info_active = list_documents(thread_id=st.session_state.current_thread_id)
+        active_chat_chunks = docs_info_active.get("total_chunks", 0)
+
+        st.markdown(
+            f"""
+            <div>
+                <span class="badge badge-blue">Qdrant: {status_data.get('qdrant_status', 'ok')}</span>
+            </div>
+            <div style="margin-top: 8px; font-size: 0.85rem; color: #475569;">
+                🗄️ <b>Chat DB:</b> Postgres<br>
+                📊 <b>Total Chunks (All Chats):</b> {status_data.get('total_chunks_indexed', 0)}<br>
+                📄 <b>Active Chat Chunks:</b> {active_chat_chunks}<br>
+                🧠 <b>Embedder:</b> {status_data.get('embedding_model', 'gemini-embedding-001')}<br>
+                🤖 <b>LLM:</b> {status_data.get('generation_model', 'gemini-3.5-flash')}
+            </div>
+            """,
+            unsafe_allow_html=True
+        )
+
+        if not gemini_ok:
+            st.warning("⚠️ `GEMINI_API_KEY` is not set in `.env`.")
 
 
 # ==========================================

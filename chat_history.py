@@ -218,8 +218,12 @@ def update_thread_title(thread_id: str, new_title: str):
             conn.commit()
 
 
-def delete_thread(thread_id: str):
-    """Delete a thread and its messages."""
+def delete_thread(thread_id: str, purge_vector_db: bool = True):
+    """
+    Delete a thread and its messages from PostgreSQL (or SQLite fallback).
+    If purge_vector_db=True, also purges all associated vector document embeddings in Qdrant.
+    """
+    thread_id = str(thread_id).strip()
     if USE_POSTGRES:
         with get_postgres_connection() as conn:
             with conn.cursor() as cursor:
@@ -232,6 +236,13 @@ def delete_thread(thread_id: str):
             cursor.execute("DELETE FROM messages WHERE thread_id = ?;", (thread_id,))
             cursor.execute("DELETE FROM threads WHERE id = ?;", (thread_id,))
             conn.commit()
+
+    if purge_vector_db:
+        try:
+            import backend
+            backend.clear_all_documents(thread_id=thread_id)
+        except Exception as vec_err:
+            logger.warning(f"Note: Vector DB cleanup during delete_thread: {vec_err}")
 
 
 def add_message(
