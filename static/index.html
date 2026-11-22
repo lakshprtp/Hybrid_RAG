@@ -258,8 +258,8 @@
 
       const formData = new FormData();
       selectedFiles.forEach(file => formData.append('files', file));
-      formData.append('chunk_size', 800);
-      formData.append('chunk_overlap', 150);
+      formData.append('chunk_size', 400);
+      formData.append('chunk_overlap', 100);
 
       try {
         const res = await fetch('/api/upload', {

@@ -11,7 +11,7 @@ load_dotenv()
 
 logger = logging.getLogger("ChatHistory")
 
-DATABASE_URL = os.getenv("DATABASE_URL", "").strip()
+DATABASE_URL = os.getenv("DATABASE_URL", "").strip().strip('"').strip("'")
 SQLITE_DB_PATH = os.getenv("CHAT_HISTORY_DB_PATH", "./chat_history.db")
 
 # Flag indicating whether we are using PostgreSQL

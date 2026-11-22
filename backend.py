@@ -36,19 +36,19 @@ logger = logging.getLogger("RAG-Backend")
 load_dotenv()
 
 # Configuration
-GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "").strip()
-TAVILY_API_KEY = os.getenv("TAVILY_API_KEY", "").strip()
-QDRANT_URL = os.getenv("QDRANT_URL", "").strip()
-QDRANT_API_KEY = os.getenv("QDRANT_API_KEY", "").strip()
-COLLECTION_NAME = os.getenv("QDRANT_COLLECTION_NAME", "rag_knowledge_base").strip()
-EMBEDDING_MODEL = os.getenv("GEMINI_EMBEDDING_MODEL", "gemini-embedding-001").strip()
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "").strip().strip('"').strip("'")
+TAVILY_API_KEY = os.getenv("TAVILY_API_KEY", "").strip().strip('"').strip("'")
+QDRANT_URL = os.getenv("QDRANT_URL", "").strip().strip('"').strip("'")
+QDRANT_API_KEY = os.getenv("QDRANT_API_KEY", "").strip().strip('"').strip("'")
+COLLECTION_NAME = os.getenv("QDRANT_COLLECTION_NAME", "rag_knowledge_base").strip().strip('"').strip("'")
+EMBEDDING_MODEL = os.getenv("GEMINI_EMBEDDING_MODEL", "gemini-embedding-001").strip().strip('"').strip("'")
 # Clean model name if passed with 'models/' prefix for google-genai
 if USE_NEW_GENAI and EMBEDDING_MODEL.startswith("models/"):
     EMBEDDING_MODEL = EMBEDDING_MODEL.replace("models/", "")
 if "text-embedding-004" in EMBEDDING_MODEL:
     EMBEDDING_MODEL = "gemini-embedding-001"
 
-GENERATION_MODEL = os.getenv("GEMINI_GENERATION_MODEL", "gemini-3.1-flash-lite").strip()
+GENERATION_MODEL = os.getenv("GEMINI_GENERATION_MODEL", "gemini-3.1-flash-lite").strip().strip('"').strip("'")
 if USE_NEW_GENAI and GENERATION_MODEL.startswith("models/"):
     GENERATION_MODEL = GENERATION_MODEL.replace("models/", "")
 if "1.5-flash" in GENERATION_MODEL or "2.5-flash" in GENERATION_MODEL:
@@ -130,9 +130,11 @@ def ensure_collection():
 
 
 def get_genai_client(api_key: Optional[str] = None):
-    """Initialize or return Gemini GenAI client."""
+    """Initialize or return Gemini GenAI client with whitespace/quote sanitized key."""
     global genai_client
     key = api_key or GEMINI_API_KEY
+    if key:
+        key = key.strip().strip('"').strip("'")
     if not key or key == "your_gemini_api_key_here":
         return None
 
@@ -147,11 +149,13 @@ def get_genai_client(api_key: Optional[str] = None):
 
 
 def get_tavily_client(api_key: Optional[str] = None) -> Optional[TavilyClient]:
-    """Get or initialize Tavily client."""
+    """Get or initialize Tavily client with sanitized key."""
     global tavily_client
     key = api_key or TAVILY_API_KEY
+    if key:
+        key = key.strip().strip('"').strip("'")
     if key and key != "your_tavily_api_key_here":
-        if tavily_client is None or tavily_client.api_key != key:
+        if tavily_client is None or getattr(tavily_client, "api_key", None) != key:
             tavily_client = TavilyClient(api_key=key)
         return tavily_client
     return None
@@ -181,22 +185,56 @@ def compute_gemini_embedding(text: str, custom_key: Optional[str] = None, task_t
     if not client:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Gemini API Key is not configured. Please set GEMINI_API_KEY in .env."
+            detail="Gemini API Key is not configured. Please set GEMINI_API_KEY in Render environment variables or .env."
         )
+
+    last_error = None
+    candidate_models = []
+    for m in [EMBEDDING_MODEL, "gemini-embedding-001", "models/gemini-embedding-001", "gemini-embedding-2-preview", "gemini-embedding-2", "text-embedding-004"]:
+        if m and m not in candidate_models:
+            candidate_models.append(m)
+
     try:
         if USE_NEW_GENAI:
-            for em_model in [EMBEDDING_MODEL, "gemini-embedding-001", "gemini-embedding-2"]:
-                try:
-                    response = client.models.embed_content(
-                        model=em_model,
-                        contents=clean_text,
-                        config={"output_dimensionality": VECTOR_DIMENSION, "task_type": task_type}
-                    )
-                    if response.embeddings:
-                        return response.embeddings[0].values
-                except Exception:
-                    continue
-            raise RuntimeError("All Gemini embedding models failed.")
+            for em_model in candidate_models:
+                for cfg in [
+                    {"output_dimensionality": VECTOR_DIMENSION, "task_type": task_type},
+                    {"task_type": task_type},
+                    None
+                ]:
+                    try:
+                        kwargs = {"model": em_model, "contents": clean_text}
+                        if cfg:
+                            kwargs["config"] = cfg
+                        response = client.models.embed_content(**kwargs)
+                        if response.embeddings:
+                            return response.embeddings[0].values
+                    except Exception as err:
+                        last_error = err
+                        continue
+
+            # Fallback to legacy google.generativeai if available
+            try:
+                import google.generativeai as legacy_genai
+                effective_key = (custom_key or GEMINI_API_KEY).strip().strip('"').strip("'")
+                legacy_genai.configure(api_key=effective_key)
+                for leg_m in ["models/text-embedding-004", "models/embedding-001", "text-embedding-004"]:
+                    try:
+                        resp = legacy_genai.embed_content(
+                            model=leg_m,
+                            content=clean_text,
+                            task_type="retrieval_document"
+                        )
+                        emb = resp.get("embedding", [])
+                        if emb:
+                            return emb
+                    except Exception as leg_err:
+                        last_error = leg_err
+                        continue
+            except Exception:
+                pass
+
+            raise RuntimeError(f"All Gemini embedding models failed. Cause: {last_error}")
         else:
             response = client.embed_content(
                 model=f"models/{EMBEDDING_MODEL}" if not EMBEDDING_MODEL.startswith("models/") else EMBEDDING_MODEL,
@@ -216,32 +254,43 @@ def compute_batch_embeddings(texts: List[str], custom_key: Optional[str] = None,
     if not client:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Gemini API Key is missing. Configure GEMINI_API_KEY."
+            detail="Gemini API Key is missing. Configure GEMINI_API_KEY in Render environment variables or .env."
         )
 
     sanitized_texts = [t.strip() for t in texts if t and len(t.strip()) > 0]
     if not sanitized_texts:
         return []
 
+    candidate_models = []
+    for m in [EMBEDDING_MODEL, "gemini-embedding-001", "models/gemini-embedding-001", "gemini-embedding-2-preview", "gemini-embedding-2", "text-embedding-004"]:
+        if m and m not in candidate_models:
+            candidate_models.append(m)
+
     embeddings = []
     for i in range(0, len(sanitized_texts), batch_size):
         batch = sanitized_texts[i:i + batch_size]
         batch_success = False
         if USE_NEW_GENAI:
-            for em_model in [EMBEDDING_MODEL, "gemini-embedding-001", "gemini-embedding-2"]:
-                try:
-                    response = client.models.embed_content(
-                        model=em_model,
-                        contents=batch,
-                        config={"output_dimensionality": VECTOR_DIMENSION, "task_type": "RETRIEVAL_DOCUMENT"}
-                    )
-                    if response.embeddings:
-                        embeddings.extend([e.values for e in response.embeddings])
-                        batch_success = True
-                        break
-                except Exception as ex:
-                    logger.warning(f"Batch embedding with {em_model} failed: {ex}")
-                    continue
+            for em_model in candidate_models:
+                for cfg in [
+                    {"output_dimensionality": VECTOR_DIMENSION, "task_type": "RETRIEVAL_DOCUMENT"},
+                    {"task_type": "RETRIEVAL_DOCUMENT"},
+                    None
+                ]:
+                    try:
+                        kwargs = {"model": em_model, "contents": batch}
+                        if cfg:
+                            kwargs["config"] = cfg
+                        response = client.models.embed_content(**kwargs)
+                        if response.embeddings:
+                            embeddings.extend([e.values for e in response.embeddings])
+                            batch_success = True
+                            break
+                    except Exception as ex:
+                        logger.warning(f"Batch embedding with {em_model} failed: {ex}")
+                        continue
+                if batch_success:
+                    break
 
         if not batch_success:
             logger.warning(f"Batch embedding fallback for batch {i//batch_size}")
@@ -383,7 +432,7 @@ def search_tavily(query: str, max_results: int = 4, search_depth: str = "basic",
 # Text Processing & Chunking
 # ==========================================
 
-def chunk_text(text: str, chunk_size: int = 800, chunk_overlap: int = 150) -> List[str]:
+def chunk_text(text: str, chunk_size: int = 400, chunk_overlap: int = 100) -> List[str]:
     """Split text into overlapping chunks respecting natural boundaries."""
     text = text.strip()
     if not text:
@@ -591,8 +640,8 @@ def get_system_status():
 
 def index_files(
     files_data: List[tuple],
-    chunk_size: int = 800,
-    chunk_overlap: int = 150,
+    chunk_size: int = 400,
+    chunk_overlap: int = 100,
     custom_gemini_key: Optional[str] = None,
     thread_id: Optional[str] = None,
     pdf_password: Optional[str] = None
@@ -680,8 +729,8 @@ def index_files(
 @app.post("/api/upload")
 async def upload_documents(
     files: List[UploadFile] = File(...),
-    chunk_size: int = Form(800),
-    chunk_overlap: int = Form(150),
+    chunk_size: int = Form(400),
+    chunk_overlap: int = Form(100),
     custom_gemini_key: Optional[str] = Form(None),
     thread_id: Optional[str] = Form(None),
     pdf_password: Optional[str] = Form(None)

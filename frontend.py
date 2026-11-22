@@ -192,9 +192,9 @@ with st.sidebar:
 
     col1, col2 = st.columns(2)
     with col1:
-        chunk_size = st.number_input("Chunk Size", min_value=200, max_value=2000, value=800, step=100)
+        chunk_size = st.number_input("Chunk Size", min_value=200, max_value=2000, value=400, step=100)
     with col2:
-        chunk_overlap = st.number_input("Overlap", min_value=0, max_value=500, value=150, step=50)
+        chunk_overlap = st.number_input("Overlap", min_value=0, max_value=500, value=100, step=50)
 
     if st.button("🚀 Index to Qdrant", use_container_width=True, disabled=not uploaded_files):
         MAX_UPLOAD_LIMIT_BYTES = 2 * 1024 * 1024
